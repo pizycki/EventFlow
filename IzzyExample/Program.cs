@@ -12,6 +12,7 @@ using EventFlow.Exceptions;
 using EventFlow.Extensions;
 using EventFlow.Queries;
 using EventFlow.ReadStores;
+using EventFlow.Subscribers;
 using EventFlow.ValueObjects;
 using Newtonsoft.Json;
 using static System.Console;
@@ -33,9 +34,10 @@ namespace ConsoleApp1
         public async Task Run(CancellationToken cancelToken)
         {
             using (var resolver = EventFlowOptions.New
-                .AddEvents(typeof(NewPaymentStarted))
+                .AddEvents(typeof(NewPaymentStartedEvent))
                 .AddCommands(typeof(StartNewPaymentCommand))
                 .AddCommandHandlers(typeof(StartNewPaymentCommandHandler))
+                .AddSynchronousSubscriber<PaymentGroupAggregate, PaymentGroupId, NewPaymentStartedEvent, NewPaymentStartedEventSubscriber>()
                 .UseInMemoryReadStoreFor<PaymentGroupRM>()
                 .CreateResolver())
             {
@@ -57,7 +59,9 @@ namespace ConsoleApp1
                     var result = await commandBus.PublishAsync(new StartNewPaymentCommand(paymentGroupId, payment, corrId), cancelToken).ConfigureAwait(false);
                     WriteLine($"Result success: {result.IsSuccess}");
 
-                    var rm = await queryProcessor.ProcessAsync(new PaymentGroupByIdQuery<PaymentGroupRM>((string)paymentGroupId), cancelToken);
+
+
+                    //var rm = await queryProcessor.ProcessAsync(new PaymentGroupByIdQuery<PaymentGroupRM>((string)paymentGroupId), cancelToken);
                 }
 
                 //Console.WriteLine(exampleReadModel.MagicNumber);
@@ -65,7 +69,7 @@ namespace ConsoleApp1
             }
         }
 
-        public class PaymentGroupAggregate : AggregateRoot<PaymentGroupAggregate, PaymentGroupId>, IEmit<NewPaymentStarted>
+        public class PaymentGroupAggregate : AggregateRoot<PaymentGroupAggregate, PaymentGroupId>, IEmit<NewPaymentStartedEvent>
         {
             public CorrelationId CorrelationId { get; private set; }
             protected List<Payment> Payments { get; } // TODO Consider changing it to own type of collection, f.e. adding some logic
@@ -90,10 +94,10 @@ namespace ConsoleApp1
 
 
 
-                Emit(new NewPaymentStarted(payment, correlationId));
+                Emit(new NewPaymentStartedEvent(payment, correlationId));
             }
 
-            public void Apply(NewPaymentStarted aggregateEvent)
+            public void Apply(NewPaymentStartedEvent aggregateEvent)
             {
                 Payments.Add(aggregateEvent.Payment);
                 Ready = false;
@@ -102,6 +106,17 @@ namespace ConsoleApp1
             private bool IsFirstPaymentInGroup() // This can be turned into specification
             {
                 return CorrelationId == null && Payments.Count == 0;
+            }
+        }
+
+        public class NewPaymentStartedEventSubscriber : ISubscribeSynchronousTo<PaymentGroupAggregate, PaymentGroupId, NewPaymentStartedEvent>
+        {
+            public static int counter;
+
+            public Task HandleAsync(IDomainEvent<PaymentGroupAggregate, PaymentGroupId, NewPaymentStartedEvent> domainEvent, CancellationToken cancellationToken)
+            {
+                WriteLine($"NewPaymentStartedEventSubscriber invoked {++counter} time(s).");
+                return Task.CompletedTask;
             }
         }
 
@@ -177,12 +192,12 @@ namespace ConsoleApp1
             public static implicit operator string(PaymentId id) => id.Value;
         }
 
-        public class NewPaymentStarted : AggregateEvent<PaymentGroupAggregate, PaymentGroupId>
+        public class NewPaymentStartedEvent : AggregateEvent<PaymentGroupAggregate, PaymentGroupId>
         {
             public Payment Payment { get; }
             public CorrelationId CorrelationId { get; }
 
-            public NewPaymentStarted(Payment payment, CorrelationId correlationId)
+            public NewPaymentStartedEvent(Payment payment, CorrelationId correlationId)
             {
                 Payment = payment;
                 CorrelationId = correlationId;
@@ -221,29 +236,14 @@ namespace ConsoleApp1
             }
         }
 
-        public class PaymentGroupRM : IReadModel, IAmReadModelFor<PaymentGroupAggregate, PaymentGroupId, NewPaymentStarted>
+        public class PaymentGroupRM : IReadModel, IAmReadModelFor<PaymentGroupAggregate, PaymentGroupId, NewPaymentStartedEvent>
         {
             public void Apply(
               IReadModelContext context,
-              IDomainEvent<PaymentGroupAggregate, PaymentGroupId, NewPaymentStarted> domainEvent)
+              IDomainEvent<PaymentGroupAggregate, PaymentGroupId, NewPaymentStartedEvent> domainEvent)
             {
                 // TODO
             }
         }
-
-        public class PaymentStateMachine : AutomatonymousStateMachine<Payment>
-        {
-            public PaymentStateMachine()
-            {
-                InstanceState(
-                    instances payment => (payment as IApplicableByStateMachine).State,
-                    states: new[] { Initialized });
-            }
-
-
-            public State Initialized { get; private set; }
-
-        }
-
     }
 }
